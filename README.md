@@ -1,101 +1,108 @@
-# elliptic-actor-graph
+# 🕵️ Actor-Level Clustering for Detecting Money-Laundering Groups in Bitcoin (Elliptic++)
 
-Actor-level clustering and graph analysis for identifying illicit groups in
-cryptocurrency transaction networks using the Elliptic++ dataset.
+**Research paper** · HUTECH University · 2026
+**Authors:** **Phan Xuân Dương** (1st author), Nguyễn Đức Vinh, Lê Nhật Tùng
 
-## Reproducible workflow
+📄 [Read the full paper (Vietnamese, PDF)](paper/elliptic-actor-graph-paper.pdf)
 
-The current pipeline is designed for a machine with 8 GB RAM and two physical
-CPU cores. It uses chunked CSV reads and avoids constructing the full graph in
-NetworkX.
+---
 
-```bash
-python -m src.data_audit --data-dir data
-python -m src.run_experiments --data-dir data --output-dir results --sample-size 20000
-python -m src.run_community --data-dir data --output-dir results --resolution 1.0
+## 📌 Table of Contents
+- [Overview](#-overview)
+- [Challenges](#-challenges)
+- [Pipeline](#-pipeline)
+- [Methods Compared](#-methods-compared)
+- [Key Results](#-key-results)
+- [Project Structure](#-project-structure)
+- [How to Run](#-how-to-run)
+- [Tech Stack](#-tech-stack)
+
+---
+
+## 📖 Overview
+Bitcoin is **pseudo-anonymous**: transactions are public, but the owners of wallet addresses are not. This makes it hard to find groups of addresses that work together in money laundering, ransomware or fraud.
+
+This project studies **community detection and clustering at the actor (wallet-address) level** on the **Elliptic++** dataset. It combines behavioral features with the address-to-address interaction graph. The labels (illicit / licit) are used **only for external evaluation**, never for training, so the whole setting is **unsupervised**.
+
+| Dataset fact | Value |
+|---|---|
+| Actors (wallet addresses) | **822,942** |
+| AddrAddr edges | **2,868,964** |
+| Illicit / Licit / Unknown | 1.73% / 30.51% / 67.76% |
+
+<img src="figures/full_actor_graph_adjacency_density.png" width="700" alt="Actor graph density" />
+
+## 🧗 Challenges
+1. **Scale:** 820K+ nodes and ~2.9M edges. Methods like GAE (N×N adjacency) and Girvan–Newman are too expensive for the full graph.
+2. **Extreme label scarcity & imbalance:** only 1.73% of actors are illicit, and most are unlabeled.
+3. **No timestamps on the AddrAddr graph**, so temporal subgraphs cannot be built directly.
+4. **No ready-made "user entity" graph:** connected components do not represent real entities (one giant component holds 822,935 addresses).
+
+## 🏗 Pipeline
+```mermaid
+flowchart LR
+    A[Elliptic++ raw CSVs] --> B[Deduplicate & aggregate actor features]
+    B --> C[Normalize features]
+    A --> D[Build undirected weighted AddrAddr graph]
+    C --> E[Feature clustering: KMeans / HDBSCAN]
+    D --> F[Community detection: Louvain / Leiden / Spectral / Girvan–Newman]
+    D --> G[Graph embeddings: Node2Vec / GAE + KMeans]
+    E & F & G --> H[Evaluation: modularity, silhouette, ARI/NMI, illicit enrichment]
 ```
+- Memory-aware design for a laptop with **8 GB RAM / 2 CPU cores**: chunked CSV reads, and the full graph is never built in NetworkX.
 
-The experiment command writes:
+## 🔬 Methods Compared
+Six unsupervised methods were run on the same preprocessing pipeline, graph and evaluation protocol:
 
-- `results/clustering_metrics.csv`: geometry and known-label agreement metrics;
-- `results/cluster_enrichment.csv`: illicit rate and enrichment by cluster;
-- `results/clustering_benchmark.png`: comparison figure.
+| Family | Methods |
+|---|---|
+| Modularity-based community detection | **Louvain**, **Leiden** |
+| Spectral / divisive | Spectral clustering, Girvan–Newman |
+| Graph representation learning | **Node2Vec + KMeans**, **GAE + KMeans** |
+| Feature-only baselines | KMeans, HDBSCAN |
 
-The Leiden command writes:
+## 📊 Key Results
+<img src="figures/paper_results_summary.png" width="800" alt="Results summary" />
 
-- `results/leiden_memberships.csv`: one community ID per actor;
-- `results/leiden_enrichment.csv`: illicit enrichment by community;
-- `results/leiden_summary.txt`: edge, community, modularity, and resolution summary.
+- **Louvain / Leiden** reach very high modularity (**0.9247 / 0.9248**), but the partition is extremely fragmented: ~96% of clusters contain a single address.
+- **Node2Vec + KMeans** and **GAE + KMeans** reach silhouettes of **0.630** and **0.751**, but they put 89.4–93.5% of addresses into one cluster.
+- **ARI against known labels is ≈ 0 for every method** (−0.0153 to 0.0006).
+- **Weighted Leiden on the full actor graph** (resolution 1.0) finds **887 communities** (modularity 0.9212). One community holds **1,142 illicit actors among 1,730 labeled ones (12.28× illicit enrichment)**. This was checked with permutation nulls and multiple seeds.
 
-The EDA notebook is [notebooks/01_actor_graph_eda.ipynb](notebooks/01_actor_graph_eda.ipynb).
-It generates figures in `figures/`, including a density image using every actor
-edge without requiring a full force-directed layout.
+💡 **Takeaway:** internal metrics (modularity, silhouette) alone **are not enough** to say that clusters mean anything for fraud detection. The paper reports these limits openly and proposes size-controlled baselines and full-graph extensions.
 
-## Project layout
+<img src="figures/leiden_cluster_visualization.png" width="700" alt="Leiden clusters" />
 
+## 📁 Project Structure
 ```text
 config/experiment.json       Reproducible settings and resource limits
-notebooks/01_actor_graph_eda.ipynb
-notebooks/02_graph_communities.ipynb
-notebooks/03_cc_mvad.ipynb
-notebooks/04_paper_results.ipynb
+notebooks/                   01 EDA → 02 graph communities → 03 CC-MVAD → 04 paper results → 05 model visualization
 src/data/                    Data audit and actor feature API
-src/graph/                   Graph API and community API
+src/graph/                   Graph and community API
 src/models/                  Clustering and multi-view API
-reports/                     Research report and paper notes
-results/                     Tables, memberships, and experiment summaries
+models/                      Saved preprocessing bundle, KMeans (k = 4/8/12) and HDBSCAN models
+results/                     Tables, memberships, enrichment, robustness summaries
 figures/                     Generated visualizations
-models/                      Saved preprocessing and clustering artifacts
+reports/                     Research report and paper notes
+paper/                       Final paper (PDF)
 ```
 
-The original flat modules in `src/` remain as the implementation and backward-
-compatible CLI surface. The new package directories provide organized imports
-for notebooks and future experiments without invalidating existing results.
+## 🚀 How to Run
+```bash
+pip install -r requirements.txt
+python -m src.data_audit      --data-dir data
+python -m src.run_experiments --data-dir data --output-dir results --sample-size 20000
+python -m src.run_community   --data-dir data --output-dir results --resolution 1.0
+```
+Download the Elliptic++ dataset into `data/` first (it is not included because of its size).
 
-## Experimental interpretation
-
-Class `3` is treated as unknown and is excluded from known-label ARI/NMI and
-illicit-rate calculations. Labels are evaluation-only and are not included in
-the clustering matrix.
-
-The first feature-clustering benchmark is intentionally a baseline, not a claimed detector:
-KMeans obtains a strong geometric silhouette but near-zero agreement with the
-known illicit/licit labels. HDBSCAN identifies noise and smaller communities,
-but its label agreement also remains weak. Weighted Leiden on the full actor
-graph is a stronger graph-specific experiment: at resolution 1.0 it produces
-887 communities with modularity 0.9212, including a large community with
-1,142 illicit actors among 1,730 known-label actors (12.28x enrichment). This
-must still be tested across resolutions and against size-controlled baselines;
-small communities can create misleadingly large enrichment ratios.
-
-Temporal stability is not currently reported. The actor feature file contains
-many one-timestep actors and its repeated rows are not sufficient to establish
-independent historical snapshots without further validation of the dataset
-semantics.
-
-The current paper-ready robustness outputs are `results/leiden_permutation_summary.csv`
-and the seed summaries under `results/leiden_seed7/` and `results/leiden_seed21/`.
-
-## Reusing fitted models
-
-Run [notebooks/05_model_visualization.ipynb](notebooks/05_model_visualization.ipynb)
-once to create the model cache:
-
-- `models/preprocessing_bundle.joblib`;
-- `models/kmeans_4.joblib`;
-- `models/kmeans_8.joblib`;
-- `models/kmeans_12.joblib`;
-- `models/hdbscan.joblib`.
-
-The notebook also writes `results/model_cluster_assignments.csv` and figures
-`figures/model_cluster_pca_grid.png` and
-`figures/leiden_cluster_visualization.png`. A saved model can be loaded without
-refitting:
-
+Load a fitted model without refitting:
 ```python
 from pathlib import Path
 from src.artifacts import load_artifact
-
 bundle = load_artifact(Path("models/kmeans_8.joblib"))
 labels = bundle["model"].predict(embedding)
 ```
+
+## 🛠 Tech Stack
+![Python](https://img.shields.io/badge/python-3670A0?style=for-the-badge&logo=python&logoColor=ffdd54) ![SciPy](https://img.shields.io/badge/SciPy-%230C55A5.svg?style=for-the-badge&logo=scipy&logoColor=white) ![scikit-learn](https://img.shields.io/badge/scikit--learn-%23F7931E.svg?style=for-the-badge&logo=scikit-learn&logoColor=white) ![Pandas](https://img.shields.io/badge/pandas-%23150458.svg?style=for-the-badge&logo=pandas&logoColor=white) ![NetworkX](https://img.shields.io/badge/NetworkX-2C5BB4?style=for-the-badge) ![igraph/Leiden](https://img.shields.io/badge/igraph_%7C_Leiden-4B8BBE?style=for-the-badge) ![Jupyter](https://img.shields.io/badge/jupyter-%23FA0F00.svg?style=for-the-badge&logo=jupyter&logoColor=white)
